@@ -1,41 +1,138 @@
-# CLAUDE.md — Project Conventions for new-api
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
 
 This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard.
 
+## Build and Development Commands
+
+### Backend (Go)
+
+```bash
+# Build the binary (version injected from VERSION file)
+go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
+
+# Run directly
+go run .
+
+# Run all tests
+go test ./...
+
+# Run tests for a specific package
+go test ./relay/channel/claude/...
+go test ./service/...
+
+# Run a single test
+go test -run TestFunctionName ./path/to/package/
+```
+
+The server listens on port 3000 by default (configurable via `PORT` env var). Requires a `.env` file or environment variables for database/Redis config. Defaults to SQLite with no Redis.
+
+### Frontend (React/Vite in `web/`)
+
+```bash
+cd web
+bun install                # Install dependencies
+bun run dev                # Dev server (proxies API to localhost:3000)
+bun run build              # Production build (outputs to web/dist/)
+bun run lint               # Check formatting (prettier)
+bun run lint:fix           # Fix formatting
+bun run eslint             # Lint JS/JSX
+bun run eslint:fix         # Fix lint issues
+bun run i18n:extract       # Extract i18n keys
+bun run i18n:sync          # Sync translation files
+bun run i18n:lint          # Lint translation files
+```
+
+The frontend is embedded into the Go binary at build time via `//go:embed web/dist`. For development, run the Vite dev server separately — it proxies API requests to the Go backend on port 3000.
+
+### Docker
+
+```bash
+docker build -t new-api .                    # Full build (frontend + backend)
+docker-compose up -d                         # Run with docker-compose
+```
+
 ## Tech Stack
 
-- **Backend**: Go 1.22+, Gin web framework, GORM v2 ORM
-- **Frontend**: React 18, Vite, Semi Design UI (@douyinfe/semi-ui)
+- **Backend**: Go 1.25+, Gin web framework, GORM v2 ORM
+- **Frontend**: React 18, Vite, Semi Design UI (@douyinfe/semi-ui), Tailwind CSS
 - **Databases**: SQLite, MySQL, PostgreSQL (all three must be supported)
 - **Cache**: Redis (go-redis) + in-memory cache
 - **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
+- **Concurrency**: `bytedance/gopkg/util/gopool` for goroutine pool
 
 ## Architecture
 
-Layered architecture: Router -> Controller -> Service -> Model
+### Layered Structure
 
 ```
-router/        — HTTP routing (API, relay, dashboard, web)
-controller/    — Request handlers
-service/       — Business logic
-model/         — Data models and DB access (GORM)
-relay/         — AI API relay/proxy with provider adapters
-  relay/channel/ — Provider-specific adapters (openai/, claude/, gemini/, aws/, etc.)
-middleware/    — Auth, rate limiting, CORS, logging, distribution
-setting/       — Configuration management (ratio, model, operation, system, performance)
-common/        — Shared utilities (JSON, crypto, Redis, env, rate-limit, etc.)
-dto/           — Data transfer objects (request/response structs)
-constant/      — Constants (API types, channel types, context keys)
-types/         — Type definitions (relay formats, file sources, errors)
-i18n/          — Backend internationalization (go-i18n, en/zh)
-oauth/         — OAuth provider implementations
-pkg/           — Internal packages (cachex, ionet)
-web/           — React frontend
-  web/src/i18n/  — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
+Router -> Controller -> Service -> Model
 ```
+
+- `router/` — HTTP routing. `SetRouter()` wires API, relay, dashboard, video, and web (SPA) routes.
+- `controller/` — Request handlers. `controller/relay.go` is the main relay entry point.
+- `service/` — Business logic (billing, token encoding, subscription tasks).
+- `model/` — Data models and DB access (GORM). Contains caching and batch-update logic.
+- `middleware/` — Auth, rate limiting, CORS, I18n, request logging, distribution.
+- `setting/` — Configuration management loaded from DB `Option` table + env vars.
+- `common/` — Shared utilities (JSON wrappers, crypto, Redis, env, rate-limit).
+- `dto/` — Data transfer objects (request/response structs for both API formats).
+- `constant/` — Constants (API types, channel types, context keys).
+- `types/` — Type definitions (relay formats, file sources, errors).
+- `i18n/` — Backend internationalization (go-i18n, en/zh).
+- `oauth/` — OAuth provider implementations.
+- `pkg/` — Internal packages (cachex, ionet).
+
+### Relay System (Core Request Flow)
+
+The relay system is the heart of the application — a multi-provider API gateway that accepts requests in OpenAI, Claude, or Gemini format, converts them to the upstream provider's native format, and converts responses back.
+
+**Request lifecycle:**
+
+1. `controller/relay.go:Relay()` — Entry point. Parses request, validates, pre-consumes billing quota, enters retry loop.
+2. Channel selection via `model.GetRandomSatisfiedChannel()` — weighted random by priority tier.
+3. Format-specific handler dispatch:
+   - OpenAI format → `relayHandler()` → `TextHelper()` / `ImageHelper()` / `AudioHelper()` / etc.
+   - Claude format → `relay.ClaudeHelper()`
+   - Gemini format → `relay.GeminiHelper()`
+4. Within each handler: adaptor is created → request converted → sent upstream → response converted back.
+5. Billing settled via `service.PostTextConsumeQuota()`.
+
+**Adaptor pattern** (`relay/channel/adapter.go`):
+- `Adaptor` interface: `Init`, `GetRequestURL`, `SetupRequestHeader`, `ConvertOpenAIRequest`, `ConvertClaudeRequest`, `ConvertGeminiRequest`, `DoRequest`, `DoResponse`, etc.
+- ~30 providers in `relay/channel/` — each implements the `Adaptor` interface (openai/, claude/, gemini/, aws/, etc.).
+- Factory in `relay/relay_adaptor.go`: `GetAdaptor(apiType)` returns the correct adaptor based on channel type.
+- Some providers reuse adaptors (e.g., OpenRouter uses the OpenAI adaptor).
+
+**Format conversion:**
+- OpenAI ↔ Claude: `relay/channel/claude/relay-claude.go` handles `RequestOpenAI2ClaudeMessage()` and `ResponseClaude2OpenAI()`.
+- OpenAI → Gemini: `relay/channel/gemini/` — Claude→Gemini chains through Claude→OpenAI→Gemini.
+- Passthrough mode: If `PassThroughRequestEnabled`, raw body is forwarded without conversion.
+
+**Key relay files:**
+- `relay/common/relay_info.go` — `RelayInfo` struct carrying all request state
+- `relay/helper/common.go` — SSE/streaming primitives
+- `relay/helper/valid_request.go` — Request parsing and validation
+- `relay/helper/model_mapped.go` — Per-channel model name mapping
+- `relay/helper/stream_scanner.go` — Generic SSE stream scanning
+
+### Database and Caching
+
+**Database init** (`model/main.go`):
+- `InitDB()` auto-detects backend from `SQL_DSN` env var prefix (postgres:// → PostgreSQL, empty → SQLite, else → MySQL).
+- Migrations use GORM `AutoMigrate` exclusively — no manual migration versioning.
+- `InitLogDB()` optionally separates logs into a second database via `LOG_SQL_DSN`.
+
+**Caching layers:**
+- **Channel cache** (in-memory): `model/channel_cache.go` — `group2model2channels` map enables O(1) channel routing. Synced periodically via `SyncChannelCache()`.
+- **Redis cache** (optional): User and Token data cached as Redis hashes. Cache-aside pattern: read Redis → miss → read DB → async update Redis.
+- **Options cache** (in-memory): `model/option.go` — key-value config from `Option` table loaded into `common.OptionMap`, synced periodically.
+
+**Batch updates** (`model/utils.go`): Write-coalescing optimization. Under load, quota/usage counters are accumulated in-memory maps and flushed to DB in bulk by a background goroutine. Redis is updated immediately for real-time reads.
 
 ## Internationalization (i18n)
 
