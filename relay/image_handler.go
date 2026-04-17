@@ -106,11 +106,44 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
-	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)
-	if newAPIError != nil {
-		// reset status code 重置状态码
-		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-		return newAPIError
+	var usage any
+	if service.IsS3Enabled() {
+		bufWriter := NewBufferResponseWriter(c.Writer)
+		c.Writer = bufWriter
+
+		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+
+		c.Writer = bufWriter.ResponseWriter
+
+		if newAPIError != nil {
+			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			return newAPIError
+		}
+
+		captured := bufWriter.GetData()
+		var imgResp dto.ImageResponse
+		if err := common.Unmarshal(captured, &imgResp); err == nil && len(imgResp.Data) > 0 {
+			if err := service.ProcessImageResponse(&imgResp); err == nil {
+				finalData, err := common.Marshal(imgResp)
+				if err == nil {
+					c.Writer.Header().Set("Content-Type", "application/json")
+					c.Writer.WriteHeader(bufWriter.GetStatusCode())
+					c.Writer.Write(finalData)
+				} else {
+					c.Writer.Write(captured)
+				}
+			} else {
+				c.Writer.Write(captured)
+			}
+		} else {
+			c.Writer.Write(captured)
+		}
+	} else {
+		usage, newAPIError = adaptor.DoResponse(c, httpResp, info)
+		if newAPIError != nil {
+			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+			return newAPIError
+		}
 	}
 
 	imageN := uint(1)

@@ -70,7 +70,9 @@ func GetOptions(c *gin.Context) {
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
 			strings.HasSuffix(k, "secret") ||
-			strings.HasSuffix(k, "api_key") {
+			strings.HasSuffix(k, "api_key") ||
+			k == "s3_storage.secret_key" ||
+			k == "s3_storage.access_key" {
 			continue
 		}
 		options = append(options, &model.Option{
