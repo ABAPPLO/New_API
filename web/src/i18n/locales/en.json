@@ -3673,6 +3673,25 @@
     "默认折叠侧边栏": "Default collapse sidebar",
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
-    "默认补全倍率": "Default completion ratio"
+    "默认补全倍率": "Default completion ratio",
+    "（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）": "(Currently only supports Epay interface, the default callback address is the server address above!)",
+    "，当前无生效订阅，将自动使用钱包": ", no active subscription. Wallet will be used automatically.",
+    "，时间：": ",time:",
+    "，点击更新": ", click Update",
+    "AI 配置助手": "AI Config Assistant",
+    "粘贴文档URL或文本，AI自动生成渠道配置": "Paste a documentation URL or text, AI auto-generates channel config",
+    "请先配置AI设置（点击齿轮图标）": "Please configure AI settings first (click the gear icon)",
+    "AI 设置（密钥仅保存在浏览器本地）": "AI Settings (key stored in browser only)",
+    "API 端点，如 https://api.openai.com/v1/chat/completions": "API Endpoint, e.g. https://api.openai.com/v1/chat/completions",
+    "API 密钥": "API Key",
+    "模型名称，如 gpt-4o": "Model Name, e.g. gpt-4o",
+    "输入文档URL或粘贴文档文本...": "Enter a documentation URL or paste text...",
+    "渠道配置预览": "Channel Config Preview",
+    "请输入该渠道的 API 密钥": "Enter the API key for this channel",
+    "渠道创建成功": "Channel created successfully",
+    "创建渠道": "Create Channel",
+    "密钥格式": "Key Format",
+    "清空": "Clear",
+    "停止": "Stop"
   }
 }

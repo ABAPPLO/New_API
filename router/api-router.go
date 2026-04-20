@@ -250,6 +250,12 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/detect", controller.DetectChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
 		}
+		aiConfigRoute := apiRouter.Group("/ai_config")
+		aiConfigRoute.Use(middleware.AdminAuth())
+		{
+			aiConfigRoute.POST("/fetch_url", controller.FetchURL)
+			aiConfigRoute.POST("/chat", controller.AIConfigChat)
+		}
 		tokenRoute := apiRouter.Group("/token")
 		tokenRoute.Use(middleware.UserAuth())
 		{

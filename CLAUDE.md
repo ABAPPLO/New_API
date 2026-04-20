@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard.
+This is an AI API gateway/proxy built with Go. It aggregates 40+ upstream AI providers (OpenAI, Claude, Gemini, Azure, AWS Bedrock, etc.) behind a unified API, with user management, billing, rate limiting, and an admin dashboard. **Go module path**: `github.com/QuantumNous/new-api`.
 
 ## Build and Development Commands
 
@@ -27,6 +27,8 @@ go test ./service/...
 # Run a single test
 go test -run TestFunctionName ./path/to/package/
 ```
+
+Tests use `github.com/stretchr/testify` (primarily `require`) and standard `net/http/httptest`. Test files are colocated with source (`*_test.go`).
 
 The server listens on port 3000 by default (configurable via `PORT` env var). Requires a `.env` file or environment variables for database/Redis config. Defaults to SQLite with no Redis.
 
@@ -64,6 +66,7 @@ docker-compose up -d                         # Run with docker-compose
 - **Auth**: JWT, WebAuthn/Passkeys, OAuth (GitHub, Discord, OIDC, etc.)
 - **Frontend package manager**: Bun (preferred over npm/yarn/pnpm)
 - **Concurrency**: `bytedance/gopkg/util/gopool` for goroutine pool
+- **WebSocket**: `gorilla/websocket` for realtime relay
 
 ## Architecture
 
@@ -84,8 +87,38 @@ Router -> Controller -> Service -> Model
 - `constant/` — Constants (API types, channel types, context keys).
 - `types/` — Type definitions (relay formats, file sources, errors).
 - `i18n/` — Backend internationalization (go-i18n, en/zh).
-- `oauth/` — OAuth provider implementations.
+- `oauth/` — OAuth provider implementations (registry pattern with `init()` registration).
 - `pkg/` — Internal packages (cachex, ionet).
+
+### Startup Sequence (`main.go`)
+
+1. `InitResources()` — loads `.env`, initializes env vars, logger, HTTP client, DB, options, pricing, Redis, i18n, OAuth providers.
+2. Gin server with `gin.CustomRecovery` (returns OpenAI-format JSON on panic).
+3. Global middleware: `RequestId → PoweredBy → I18n → session → logger`.
+4. `router.SetRouter()` wires all routes.
+5. Background goroutines: channel cache sync, options sync, quota data updates, channel auto-update/test, subscription resets, task polling, batch updater.
+
+### Router Structure
+
+| File | Route Prefix | Auth |
+|---|---|---|
+| `router/api-router.go` | `/api/*` | Session-based (UserAuth/AdminAuth/RootAuth) |
+| `router/relay-router.go` | `/v1/*`, `/v1beta/*` | TokenAuth (API key) |
+| `router/video-router.go` | `/v1/video/*`, `/kling/*`, `/jimeng/*` | TokenAuth or TokenOrUserAuth |
+| `router/dashboard.go` | `/dashboard/billing/*` | TokenAuth |
+| `router/web-router.go` | `/*` (SPA catch-all) | None |
+
+Relay middleware chain: `RouteTag → SystemPerformanceCheck → TokenAuth → ModelRequestRateLimit → Distribute`.
+
+### Authentication
+
+Three auth mechanisms in `middleware/auth.go`:
+
+1. **Session auth** (UserAuth/AdminAuth/RootAuth): Cookie-based sessions via `gin-contrib/sessions`. Roles: `RoleCommonUser` (1), `RoleAdminUser` (10), `RoleRootUser` (100). Fallback to `Authorization` header.
+2. **Token auth** (TokenAuth): Parses `Authorization: Bearer sk-xxx` (or `x-api-key`, `?key=`, `Sec-WebSocket-Protocol`, `mj-api-secret` depending on format). Token format: `sk-{key}[-{channel_id}]` where optional channel_id pins to a specific channel.
+3. **TokenOrUserAuth**: Tries session first, falls back to token auth.
+
+Auth context keys (defined in `constant/context_key.go`): `id`, `role`, `username`, `group`, `token_id`, `token_key`, `token_name`, `token_unlimited_quota`, `token_model_limit_enabled`, `token_model_limit`, `specific_channel_id`.
 
 ### Relay System (Core Request Flow)
 
@@ -119,6 +152,50 @@ The relay system is the heart of the application — a multi-provider API gatewa
 - `relay/helper/valid_request.go` — Request parsing and validation
 - `relay/helper/model_mapped.go` — Per-channel model name mapping
 - `relay/helper/stream_scanner.go` — Generic SSE stream scanning
+
+**Channel types**: 58 channel types defined in `constant/channel.go` (IDs 0-57). API types in `constant/api_type.go` map channel types to wire protocols (not 1:1).
+
+**Channel affinity**: `service.RecordChannelAffinity()` / `service.GetPreferredChannelByAffinity()` — sticky routing to prefer the same channel for a given model+group, improving cache hit rates on upstream providers.
+
+### Video/Task Relay
+
+Video relay uses a submit-poll-fetch pattern in `relay/relay_task.go` with provider adaptors in `relay/channel/task/`:
+1. **Submit**: `controller.RelayTask` → provider adaptor → upstream submit.
+2. **Poll**: `service.TaskPollingLoop()` polls upstream for status updates in background.
+3. **Fetch**: `controller.RelayTaskFetch` returns current task status.
+
+Supported: Sora, Kling, Jimeng, Doubao, Vidu, Gemini, Hailuo, Ali.
+
+### Error Handling
+
+Error system in `types/error.go`:
+- **`types.NewAPIError`** — universal error wrapper with fields: `Err`, `RelayError`, `skipRetry`, `errorCode`, `errorType`, `StatusCode`.
+- **Error codes** (`types.ErrorCode`): string constants like `"insufficient_user_quota"`, `"model_not_found"`.
+- **Error types**: `"new_api_error"`, `"openai_error"`, `"claude_error"`, `"midjourney_error"`, `"gemini_error"`, `"upstream_error"`.
+- **Functional options**: `NewError(err, code, ErrOptionWithSkipRetry(), ErrOptionWithStatusCode())` etc.
+- **Format conversion**: `ToOpenAIError()`, `ToClaudeError()` convert between upstream error formats.
+- **API responses** (`common/gin.go`): Success → `ApiSuccess(c, data)` returns `{"success": true, "data": ...}`; Error → `ApiError(c, err)` returns `{"success": false, "message": "..."}`. Relay errors use OpenAI/Claude format directly.
+
+### Billing/Quota System
+
+**Quota unit**: Internal "quota" units. `USD = 500000` quota per $1 (configurable via `QuotaPerUnit`).
+
+**Pricing ratios** (in `setting/ratio_setting/`): `ModelRatio`, `CompletionRatio`, `GroupRatio`, `CacheRatio`, `ImageRatio`, `AudioRatio`, `ModelPrice` (per-request fixed pricing).
+
+**Billing flow**:
+1. **Pre-consume**: Quota deducted from token before upstream call.
+2. **Request**: Sent to upstream provider.
+3. **Post-consume**: Actual usage calculated, difference settled (refund or additional charge).
+4. **Log**: `model.RecordConsumeLog()`.
+
+**Payment integrations**: Epay, Stripe, Creem, Waffo. **Subscriptions**: Plans with daily/weekly/monthly quota resets.
+
+### Configuration System
+
+Three-layer configuration:
+1. **Environment variables** (`common/init.go`): parsed at startup via `os.Getenv` and `GetEnvOrDefault*` helpers.
+2. **DB `Option` table** (`model/option.go`): key-value pairs loaded into `common.OptionMap`, synced periodically.
+3. **Structured config** (`setting/config/`): `ConfigManager` with `Register(name, structPtr)` pattern. Sub-packages: `ratio_setting/`, `operation_setting/`, `system_setting/`, `model_setting/`, `performance_setting/`.
 
 ### Database and Caching
 
