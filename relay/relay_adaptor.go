@@ -120,6 +120,8 @@ func GetAdaptor(apiType int) channel.Adaptor {
 		return &replicate.Adaptor{}
 	case constant.APITypeCodex:
 		return &codex.Adaptor{}
+	case constant.APITypeKKAPI:
+		return &openai.Adaptor{}
 	}
 	return nil
 }
