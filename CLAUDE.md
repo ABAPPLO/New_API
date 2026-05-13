@@ -30,7 +30,16 @@ go test -run TestFunctionName ./path/to/package/
 
 Tests use `github.com/stretchr/testify` (primarily `require`) and standard `net/http/httptest`. Test files are colocated with source (`*_test.go`).
 
-The server listens on port 3000 by default (configurable via `PORT` env var). Requires a `.env` file or environment variables for database/Redis config. Defaults to SQLite with no Redis.
+The server listens on port 3000 by default (configurable via `PORT` env var). Requires a `.env` file or environment variables for database/Redis config. Defaults to SQLite with no Redis. Health check endpoint: `GET /api/status` returns `{"success": true}`.
+
+**Key env vars for development:**
+- `ENABLE_PPROF=true` — starts pprof on `0.0.0.0:8005` for profiling
+- `STREAM_SCANNER_MAX_BUFFER_MB` — SSE stream buffer limit (default 64)
+- `MAX_REQUEST_BODY_MB` — max request body size (default 32)
+- `SESSION_SECRET` — required for multi-machine deployment
+- `CRYPTO_SECRET` — required when sharing Redis across instances
+
+The `VERSION` file is intentionally empty in the repo — it gets populated during CI builds via `git describe --tags`.
 
 ### Frontend (React/Vite in `web/`)
 
@@ -56,6 +65,8 @@ The frontend is embedded into the Go binary at build time via `//go:embed web/di
 docker build -t new-api .                    # Full build (frontend + backend)
 docker-compose up -d                         # Run with docker-compose
 ```
+
+The Dockerfile is a 3-stage build: Bun for frontend → `golang:1.26.1-alpine` for backend (`CGO_ENABLED=0`, `GOEXPERIMENT=greenteagc`) → `debian:bookworm-slim` runtime. Published as `calciumion/new-api:latest` on Docker Hub. An Electron desktop app for Windows is also built from `electron/` via CI.
 
 ## Tech Stack
 
@@ -90,13 +101,17 @@ Router -> Controller -> Service -> Model
 - `oauth/` — OAuth provider implementations (registry pattern with `init()` registration).
 - `pkg/` — Internal packages (cachex, ionet).
 
+**Notable dependencies**: `shopspring/decimal` for precise billing calculations, `tiktoken-go/tokenizer` for token counting, `tidwall/gjson`/`sjson` for fast JSON field access without full unmarshal, `grafana/pyroscope-go` for continuous profiling, `pquerna/otp` for 2FA/TOTP, `go-playground/validator/v10` for request validation.
+
 ### Startup Sequence (`main.go`)
 
 1. `InitResources()` — loads `.env`, initializes env vars, logger, HTTP client, DB, options, pricing, Redis, i18n, OAuth providers.
 2. Gin server with `gin.CustomRecovery` (returns OpenAI-format JSON on panic).
 3. Global middleware: `RequestId → PoweredBy → I18n → session → logger`.
 4. `router.SetRouter()` wires all routes.
-5. Background goroutines: channel cache sync, options sync, quota data updates, channel auto-update/test, subscription resets, task polling, batch updater.
+5. Background goroutines: channel cache sync, options sync, quota data updates, channel auto-update/test, subscription resets, task polling, batch updater, Codex credential refresh.
+
+Analytics (Umami/Google) are injected into the embedded `index.html` at runtime via marker comments (`<!--umami-->`, `<!--Google Analytics-->`), controlled by `UMAMI_WEBSITE_ID` / `GOOGLE_ANALYTICS_ID` env vars.
 
 ### Router Structure
 
