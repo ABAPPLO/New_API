@@ -249,6 +249,8 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/apply_all", controller.ApplyAllChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect", controller.DetectChannelUpstreamModelUpdates)
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
+			channelRoute.POST("/import/fetch", controller.FetchRemoteChannels)
+			channelRoute.POST("/import", controller.ImportChannels)
 		}
 		aiConfigRoute := apiRouter.Group("/ai_config")
 		aiConfigRoute.Use(middleware.AdminAuth())

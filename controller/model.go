@@ -123,6 +123,14 @@ func ListModels(c *gin.Context, modelType int) {
 		}
 	}
 
+	// Build modelName -> tags map from pricing data (cached)
+	modelTagsMap := make(map[string]string)
+	for _, p := range model.GetPricing() {
+		if p.Tags != "" {
+			modelTagsMap[p.ModelName] = p.Tags
+		}
+	}
+
 	modelLimitEnable := common.GetContextKeyBool(c, constant.ContextKeyTokenModelLimitEnabled)
 	if modelLimitEnable {
 		s, ok := common.GetContextKey(c, constant.ContextKeyTokenModelLimit)
@@ -141,6 +149,7 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 			if oaiModel, ok := openAIModelsMap[allowModel]; ok {
 				oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(allowModel)
+				oaiModel.Tags = modelTagsMap[allowModel]
 				userOpenAiModels = append(userOpenAiModels, oaiModel)
 			} else {
 				userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
@@ -148,6 +157,7 @@ func ListModels(c *gin.Context, modelType int) {
 					Object:                 "model",
 					Created:                1626777600,
 					OwnedBy:                "custom",
+					Tags:                   modelTagsMap[allowModel],
 					SupportedEndpointTypes: model.GetModelSupportEndpointTypes(allowModel),
 				})
 			}
@@ -189,6 +199,7 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 			if oaiModel, ok := openAIModelsMap[modelName]; ok {
 				oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(modelName)
+				oaiModel.Tags = modelTagsMap[modelName]
 				userOpenAiModels = append(userOpenAiModels, oaiModel)
 			} else {
 				userOpenAiModels = append(userOpenAiModels, dto.OpenAIModels{
@@ -196,6 +207,7 @@ func ListModels(c *gin.Context, modelType int) {
 					Object:                 "model",
 					Created:                1626777600,
 					OwnedBy:                "custom",
+					Tags:                   modelTagsMap[modelName],
 					SupportedEndpointTypes: model.GetModelSupportEndpointTypes(modelName),
 				})
 			}
@@ -264,6 +276,13 @@ func EnabledListModels(c *gin.Context) {
 func RetrieveModel(c *gin.Context, modelType int) {
 	modelId := c.Param("model")
 	if aiModel, ok := openAIModelsMap[modelId]; ok {
+		// Enrich with tags from pricing data
+		for _, p := range model.GetPricing() {
+			if p.ModelName == modelId && p.Tags != "" {
+				aiModel.Tags = p.Tags
+				break
+			}
+		}
 		switch modelType {
 		case constant.ChannelTypeAnthropic:
 			c.JSON(200, dto.AnthropicModel{

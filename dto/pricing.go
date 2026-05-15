@@ -8,6 +8,7 @@ type OpenAIModels struct {
 	Object                 string                  `json:"object"`
 	Created                int                     `json:"created"`
 	OwnedBy                string                  `json:"owned_by"`
+	Tags                   string                  `json:"tags,omitempty"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 }
 
