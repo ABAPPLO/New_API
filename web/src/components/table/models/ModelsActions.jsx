@@ -41,6 +41,7 @@ const ModelsActions = ({
   applyUpstreamOverwrite,
   compactMode,
   setCompactMode,
+  onRefresh,
   t,
 }) => {
   // Modal states
@@ -224,6 +225,7 @@ const ModelsActions = ({
           setShowEdit(true);
           setShowMissingModal(false);
         }}
+        onRefresh={onRefresh}
         t={t}
       />
 

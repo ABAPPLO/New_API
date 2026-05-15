@@ -251,6 +251,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.POST("/upstream_updates/detect_all", controller.DetectAllChannelUpstreamModelUpdates)
 			channelRoute.POST("/import/fetch", controller.FetchRemoteChannels)
 			channelRoute.POST("/import", controller.ImportChannels)
+			channelRoute.POST("/batch_import_pricing", controller.BatchImportPricing)
 		}
 		aiConfigRoute := apiRouter.Group("/ai_config")
 		aiConfigRoute.Use(middleware.AdminAuth())
@@ -354,6 +355,7 @@ func SetApiRouter(router *gin.Engine) {
 			modelsRoute.GET("/sync_upstream/preview", controller.SyncUpstreamPreview)
 			modelsRoute.POST("/sync_upstream", controller.SyncUpstreamModels)
 			modelsRoute.GET("/missing", controller.GetMissingModels)
+			modelsRoute.POST("/batch_smart_fill", controller.BatchSmartFill)
 			modelsRoute.GET("/", controller.GetAllModelsMeta)
 			modelsRoute.GET("/search", controller.SearchModelsMeta)
 			modelsRoute.GET("/:id", controller.GetModelMeta)

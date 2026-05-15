@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Table,
@@ -26,29 +26,70 @@ import {
   Typography,
   Empty,
   Input,
+  Select,
+  Space,
+  Tag,
 } from '@douyinfe/semi-ui';
 import {
   IllustrationNoResult,
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
-import { IconSearch } from '@douyinfe/semi-icons';
-import { API, showError } from '../../../../helpers';
+import { IconSearch, IconStar } from '@douyinfe/semi-icons';
+import { API, showError, showSuccess } from '../../../../helpers';
 import { MODEL_TABLE_PAGE_SIZE } from '../../../../constants';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
+import {
+  MODEL_TYPE_COLORS,
+  MODEL_TYPE_LABELS,
+  detectModelType,
+} from '../../../../pages/Setting/Ratio/hooks/useModelPricingEditorState';
 
-const MissingModelsModal = ({ visible, onClose, onConfigureModel, t }) => {
+const parseOptionJSON = (rawValue) => {
+  if (!rawValue || typeof rawValue !== 'string' || rawValue.trim() === '')
+    return {};
+  try {
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const MODEL_TYPES = ['text', 'image', 'video', 'audio'];
+
+const MissingModelsModal = ({
+  visible,
+  onClose,
+  onConfigureModel,
+  onRefresh,
+  t,
+}) => {
   const [loading, setLoading] = useState(false);
   const [missingModels, setMissingModels] = useState([]);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const isMobile = useIsMobile();
 
+  // Smart fill states
+  const [smartFillVisible, setSmartFillVisible] = useState(false);
+  const [smartFillLoading, setSmartFillLoading] = useState(false);
+  const [modelTypes, setModelTypes] = useState({});
+  const [ratioOptions, setRatioOptions] = useState({});
+  const [referenceModelName, setReferenceModelName] = useState('');
+
   const fetchMissing = async () => {
     setLoading(true);
     try {
       const res = await API.get('/api/models/missing');
       if (res.data.success) {
-        setMissingModels(res.data.data || []);
+        const data = res.data.data || [];
+        setMissingModels(data);
+        // Auto-detect types
+        const types = {};
+        for (const name of data) {
+          types[name] = detectModelType(name);
+        }
+        setModelTypes(types);
       } else {
         showError(res.data.message);
       }
@@ -58,17 +99,53 @@ const MissingModelsModal = ({ visible, onClose, onConfigureModel, t }) => {
     setLoading(false);
   };
 
+  // Fetch ratio options for reference model selection
+  const fetchRatioOptions = async () => {
+    try {
+      const res = await API.get('/api/option/');
+      if (res.data.success) {
+        setRatioOptions(res.data.data || {});
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     if (visible) {
       fetchMissing();
+      fetchRatioOptions();
       setSearchKeyword('');
       setCurrentPage(1);
+      setSmartFillVisible(false);
+      setReferenceModelName('');
     } else {
       setMissingModels([]);
     }
   }, [visible]);
 
-  // 过滤和分页逻辑
+  // Models that already have pricing (for reference selector)
+  const configuredModels = useMemo(() => {
+    const modelRatioMap = parseOptionJSON(ratioOptions.ModelRatio);
+    const modelPriceMap = parseOptionJSON(ratioOptions.ModelPrice);
+    const names = new Set([
+      ...Object.keys(modelRatioMap),
+      ...Object.keys(modelPriceMap),
+    ]);
+    return Array.from(names).sort();
+  }, [ratioOptions.ModelRatio, ratioOptions.ModelPrice]);
+
+  // Type distribution stats
+  const typeStats = useMemo(() => {
+    const stats = { text: 0, image: 0, video: 0, audio: 0 };
+    for (const name of missingModels) {
+      const type = modelTypes[name] || 'text';
+      stats[type] = (stats[type] || 0) + 1;
+    }
+    return stats;
+  }, [missingModels, modelTypes]);
+
+  // Filter and pagination
   const filteredModels = missingModels.filter((model) =>
     model.toLowerCase().includes(searchKeyword.toLowerCase()),
   );
@@ -82,6 +159,39 @@ const MissingModelsModal = ({ visible, onClose, onConfigureModel, t }) => {
     }));
   })();
 
+  const handleModelTypeChange = (name, type) => {
+    setModelTypes((prev) => ({ ...prev, [name]: type }));
+  };
+
+  const handleSmartFill = async () => {
+    setSmartFillLoading(true);
+    try {
+      const models = missingModels.map((name) => ({
+        name,
+        type: modelTypes[name] || 'text',
+      }));
+      const modelRatioMap = parseOptionJSON(ratioOptions.ModelRatio);
+      const defaultRatio = modelRatioMap[referenceModelName] || 1.0;
+
+      const res = await API.post('/api/models/batch_smart_fill', {
+        models,
+        default_ratio: defaultRatio,
+      });
+      if (res.data.success) {
+        showSuccess(res.data.message);
+        setSmartFillVisible(false);
+        onRefresh?.();
+        onClose();
+      } else {
+        showError(res.data.message);
+      }
+    } catch {
+      showError(t('智能填充失败'));
+    } finally {
+      setSmartFillLoading(false);
+    }
+  };
+
   const columns = [
     {
       title: t('模型名称'),
@@ -90,6 +200,28 @@ const MissingModelsModal = ({ visible, onClose, onConfigureModel, t }) => {
         <div className='flex items-center'>
           <Typography.Text strong>{text}</Typography.Text>
         </div>
+      ),
+    },
+    {
+      title: t('输出类型'),
+      dataIndex: 'type',
+      width: 120,
+      render: (_, record) => (
+        <Select
+          size='small'
+          value={modelTypes[record.model] || 'text'}
+          onChange={(val) => handleModelTypeChange(record.model, val)}
+          style={{ width: 90 }}
+          showClear={false}
+        >
+          {MODEL_TYPES.map((type) => (
+            <Select.Option key={type} value={type}>
+              <Tag size='small' color={MODEL_TYPE_COLORS[type]}>
+                {t(MODEL_TYPE_LABELS[type])}
+              </Tag>
+            </Select.Option>
+          ))}
+        </Select>
       ),
     },
     {
@@ -110,88 +242,178 @@ const MissingModelsModal = ({ visible, onClose, onConfigureModel, t }) => {
   ];
 
   return (
-    <Modal
-      title={
-        <div className='flex flex-col gap-2 w-full'>
-          <div className='flex items-center gap-2'>
-            <Typography.Text
-              strong
-              className='!text-[var(--semi-color-text-0)] !text-base'
-            >
-              {t('未配置的模型列表')}
-            </Typography.Text>
-            <Typography.Text type='tertiary' size='small'>
-              {t('共')} {missingModels.length} {t('个未配置模型')}
-            </Typography.Text>
-          </div>
-        </div>
-      }
-      visible={visible}
-      onCancel={onClose}
-      footer={null}
-      size={isMobile ? 'full-width' : 'medium'}
-      className='!rounded-lg'
-    >
-      <Spin spinning={loading}>
-        {missingModels.length === 0 && !loading ? (
-          <Empty
-            image={<IllustrationNoResult style={{ width: 150, height: 150 }} />}
-            darkModeImage={
-              <IllustrationNoResultDark style={{ width: 150, height: 150 }} />
-            }
-            description={t('暂无缺失模型')}
-            style={{ padding: 30 }}
-          />
-        ) : (
-          <div className='missing-models-content'>
-            {/* 搜索框 */}
-            <div className='flex items-center justify-end gap-2 w-full mb-4'>
-              <Input
-                placeholder={t('搜索模型...')}
-                value={searchKeyword}
-                onChange={(v) => {
-                  setSearchKeyword(v);
-                  setCurrentPage(1);
-                }}
-                className='!w-full'
-                prefix={<IconSearch />}
-                showClear
-              />
+    <>
+      <Modal
+        title={
+          <div className='flex flex-col gap-2 w-full'>
+            <div className='flex items-center justify-between'>
+              <div className='flex items-center gap-2'>
+                <Typography.Text
+                  strong
+                  className='!text-[var(--semi-color-text-0)] !text-base'
+                >
+                  {t('未配置的模型列表')}
+                </Typography.Text>
+                <Typography.Text type='tertiary' size='small'>
+                  {t('共')} {missingModels.length} {t('个未配置模型')}
+                </Typography.Text>
+              </div>
+              {missingModels.length > 0 && (
+                <Button
+                  theme='solid'
+                  type='primary'
+                  size='small'
+                  icon={<IconStar />}
+                  onClick={() => setSmartFillVisible(true)}
+                >
+                  {t('智能填充')}
+                </Button>
+              )}
             </div>
+          </div>
+        }
+        visible={visible}
+        onCancel={onClose}
+        footer={null}
+        size={isMobile ? 'full-width' : 'medium'}
+        className='!rounded-lg'
+      >
+        <Spin spinning={loading}>
+          {missingModels.length === 0 && !loading ? (
+            <Empty
+              image={
+                <IllustrationNoResult style={{ width: 150, height: 150 }} />
+              }
+              darkModeImage={
+                <IllustrationNoResultDark
+                  style={{ width: 150, height: 150 }}
+                />
+              }
+              description={t('暂无缺失模型')}
+              style={{ padding: 30 }}
+            />
+          ) : (
+            <div className='missing-models-content'>
+              <div className='flex items-center justify-end gap-2 w-full mb-4'>
+                <Input
+                  placeholder={t('搜索模型...')}
+                  value={searchKeyword}
+                  onChange={(v) => {
+                    setSearchKeyword(v);
+                    setCurrentPage(1);
+                  }}
+                  className='!w-full'
+                  prefix={<IconSearch />}
+                  showClear
+                />
+              </div>
 
-            {/* 表格 */}
-            {filteredModels.length > 0 ? (
-              <Table
-                columns={columns}
-                dataSource={dataSource}
-                pagination={{
-                  currentPage: currentPage,
-                  pageSize: MODEL_TABLE_PAGE_SIZE,
-                  total: filteredModels.length,
-                  showSizeChanger: false,
-                  onPageChange: (page) => setCurrentPage(page),
-                }}
-              />
-            ) : (
-              <Empty
-                image={
-                  <IllustrationNoResult style={{ width: 100, height: 100 }} />
-                }
-                darkModeImage={
-                  <IllustrationNoResultDark
-                    style={{ width: 100, height: 100 }}
-                  />
-                }
-                description={
-                  searchKeyword ? t('未找到匹配的模型') : t('暂无缺失模型')
-                }
-                style={{ padding: 20 }}
-              />
+              {filteredModels.length > 0 ? (
+                <Table
+                  columns={columns}
+                  dataSource={dataSource}
+                  pagination={{
+                    currentPage: currentPage,
+                    pageSize: MODEL_TABLE_PAGE_SIZE,
+                    total: filteredModels.length,
+                    showSizeChanger: false,
+                    onPageChange: (page) => setCurrentPage(page),
+                  }}
+                />
+              ) : (
+                <Empty
+                  image={
+                    <IllustrationNoResult
+                      style={{ width: 100, height: 100 }}
+                    />
+                  }
+                  darkModeImage={
+                    <IllustrationNoResultDark
+                      style={{ width: 100, height: 100 }}
+                    />
+                  }
+                  description={
+                    searchKeyword
+                      ? t('未找到匹配的模型')
+                      : t('暂无缺失模型')
+                  }
+                  style={{ padding: 20 }}
+                />
+              )}
+            </div>
+          )}
+        </Spin>
+      </Modal>
+
+      {/* Smart Fill Modal */}
+      <Modal
+        title={t('智能填充')}
+        visible={smartFillVisible}
+        onCancel={() => setSmartFillVisible(false)}
+        onOk={handleSmartFill}
+        okText={t('确认填充')}
+        okButtonProps={{ loading: smartFillLoading }}
+        loading={smartFillLoading}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <div className='mb-2 font-medium'>{t('选择参考模型（可选）')}</div>
+          <Select
+            style={{ width: '100%' }}
+            placeholder={t('选择一个已配置定价的模型，将其倍率作为默认值')}
+            value={referenceModelName}
+            onChange={setReferenceModelName}
+            showClear
+            filter
+          >
+            {configuredModels.map((name) => (
+              <Select.Option key={name} value={name}>
+                {name}
+              </Select.Option>
+            ))}
+          </Select>
+          <div className='mt-2 text-xs text-gray-500'>
+            {t(
+              '文本/音频模型将使用参考模型的输入倍率，图片/视频模型将使用按次计费（$0.04/次）。未选择参考模型时默认倍率为 1.0。',
             )}
           </div>
-        )}
-      </Spin>
-    </Modal>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div className='mb-2 font-medium'>{t('模型类型分布')}</div>
+          <Space wrap>
+            {Object.entries(typeStats)
+              .filter(([, count]) => count > 0)
+              .map(([type, count]) => (
+                <Tag key={type} color={MODEL_TYPE_COLORS[type]}>
+                  {t(MODEL_TYPE_LABELS[type])}: {count}
+                </Tag>
+              ))}
+          </Space>
+          <div className='mt-2 text-xs text-gray-500'>
+            {t(
+              '共 {{count}} 个未配置模型。类型已自动检测，可在列表中修改。',
+              { count: missingModels.length },
+            )}
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'var(--semi-color-primary-light-default)',
+            border: '1px solid var(--semi-color-primary)',
+          }}
+        >
+          <Typography.Text>
+            {t(
+              '确认后将自动创建模型元数据并设置定价，共 {{count}} 个模型。',
+              { count: missingModels.length },
+            )}
+          </Typography.Text>
+        </div>
+      </Modal>
+    </>
   );
 };
 

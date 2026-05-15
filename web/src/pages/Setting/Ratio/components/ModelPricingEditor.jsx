@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
@@ -28,6 +28,7 @@ import {
   Modal,
   Radio,
   RadioGroup,
+  Select,
   Space,
   Switch,
   Table,
@@ -44,6 +45,8 @@ import { useTranslation } from 'react-i18next';
 import {
   PAGE_SIZE,
   PRICE_SUFFIX,
+  MODEL_TYPE_COLORS,
+  MODEL_TYPE_LABELS,
   buildSummaryText,
   hasValue,
   useModelPricingEditorState,
@@ -95,6 +98,10 @@ export default function ModelPricingEditor({
   listDescription = '',
   emptyTitle = '',
   emptyDescription = '',
+  showTypeSelector = false,
+  modelTypes = {},
+  onModelTypeChange,
+  onSmartFillReady,
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
@@ -127,6 +134,7 @@ export default function ModelPricingEditor({
     addModel,
     deleteModel,
     applySelectedModelPricing,
+    smartFillModels,
   } = useModelPricingEditorState({
     options,
     refresh,
@@ -134,6 +142,12 @@ export default function ModelPricingEditor({
     candidateModelNames,
     filterMode,
   });
+
+  useEffect(() => {
+    if (onSmartFillReady) {
+      onSmartFillReady(smartFillModels);
+    }
+  }, [smartFillModels, onSmartFillReady]);
 
   const columns = useMemo(
     () => [
@@ -170,6 +184,30 @@ export default function ModelPricingEditor({
           </Space>
         ),
       },
+      showTypeSelector
+        ? {
+            title: t('输出类型'),
+            key: 'type',
+            width: 110,
+            render: (_, record) => (
+              <Select
+                size='small'
+                value={modelTypes[record.name] || 'text'}
+                onChange={(val) => onModelTypeChange?.(record.name, val)}
+                style={{ width: 90 }}
+                showClear={false}
+              >
+                {['text', 'image', 'video', 'audio'].map((type) => (
+                  <Select.Option key={type} value={type}>
+                    <Tag size='small' color={MODEL_TYPE_COLORS[type]}>
+                      {t(MODEL_TYPE_LABELS[type])}
+                    </Tag>
+                  </Select.Option>
+                ))}
+              </Select>
+            ),
+          }
+        : null,
       {
         title: t('计费方式'),
         dataIndex: 'billingMode',
@@ -208,12 +246,15 @@ export default function ModelPricingEditor({
     [
       allowDeleteModel,
       deleteModel,
+      modelTypes,
+      onModelTypeChange,
       selectedModelName,
       selectedModelNames,
       setSelectedModelName,
+      showTypeSelector,
       t,
     ],
-  );
+  ).filter(Boolean);
 
   const handleAddModel = () => {
     if (addModel(newModelName)) {

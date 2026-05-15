@@ -175,6 +175,7 @@ const ModelsPage = () => {
               applyUpstreamOverwrite={modelsData.applyUpstreamOverwrite}
               compactMode={compactMode}
               setCompactMode={setCompactMode}
+              onRefresh={refresh}
               t={t}
             />
 

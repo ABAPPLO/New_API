@@ -5,7 +5,7 @@ import (
 )
 
 // 简化的供应商映射规则
-var defaultVendorRules = map[string]string{
+var DefaultVendorRules = map[string]string{
 	"gpt":      "OpenAI",
 	"dall-e":   "OpenAI",
 	"whisper":  "OpenAI",
@@ -78,9 +78,9 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 		// 匹配供应商
 		vendorID := 0
 		modelLower := strings.ToLower(modelName)
-		for pattern, vendorName := range defaultVendorRules {
+		for pattern, vendorName := range DefaultVendorRules {
 			if strings.Contains(modelLower, pattern) {
-				vendorID = getOrCreateVendor(vendorName, vendorMap)
+				vendorID = GetOrCreateVendorByName(vendorName, vendorMap)
 				break
 			}
 		}
@@ -96,7 +96,7 @@ func initDefaultVendorMapping(metaMap map[string]*Model, vendorMap map[int]*Vend
 }
 
 // 查找或创建供应商
-func getOrCreateVendor(vendorName string, vendorMap map[int]*Vendor) int {
+func GetOrCreateVendorByName(vendorName string, vendorMap map[int]*Vendor) int {
 	// 查找现有供应商
 	for id, vendor := range vendorMap {
 		if vendor.Name == vendorName {

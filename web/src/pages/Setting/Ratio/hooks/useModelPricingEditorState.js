@@ -3,6 +3,36 @@ import { API, showError, showSuccess } from '../../../../helpers';
 
 export const PAGE_SIZE = 10;
 export const PRICE_SUFFIX = '$/1M tokens';
+
+export const MODEL_TYPES = ['text', 'image', 'video', 'audio'];
+
+export const MODEL_TYPE_LABELS = {
+  text: '文本',
+  image: '图片',
+  video: '视频',
+  audio: '音频',
+};
+
+export const MODEL_TYPE_COLORS = {
+  text: 'blue',
+  image: 'orange',
+  video: 'purple',
+  audio: 'green',
+};
+
+export const detectModelType = (name) => {
+  const n = name.toLowerCase();
+  if (
+    /dall-e|gpt-image|flux[-.]|imagen|midjourney|mj_|stable[-_.]?diffusion|sd[-_]/i.test(
+      n,
+    )
+  )
+    return 'image';
+  if (/sora|kling|vidu|jimeng|cogvideo|veo[-_.]|wan[-_.]|video[-_]/i.test(n))
+    return 'video';
+  if (/audio|tts|speech|whisper|realtime/i.test(n)) return 'audio';
+  return 'text';
+};
 const EMPTY_CANDIDATE_MODEL_NAMES = [];
 
 const EMPTY_MODEL = {
@@ -948,6 +978,31 @@ export function useModelPricingEditorState({
     }
   };
 
+  const smartFillModels = (referenceInputPrice, typeMap) => {
+    setModels((previous) =>
+      previous.map((model) => {
+        const type = typeMap[model.name] || 'text';
+        if (type === 'image' || type === 'video') {
+          return {
+            ...model,
+            billingMode: 'per-request',
+            fixedPrice: '0.04',
+          };
+        }
+        const inputPrice =
+          toNumberOrNull(referenceInputPrice) !== null
+            ? String(referenceInputPrice)
+            : '2';
+        return {
+          ...model,
+          billingMode: 'per-token',
+          inputPrice,
+        };
+      }),
+    );
+    return true;
+  };
+
   return {
     models,
     selectedModel,
@@ -974,5 +1029,6 @@ export function useModelPricingEditorState({
     addModel,
     deleteModel,
     applySelectedModelPricing,
+    smartFillModels,
   };
 }
