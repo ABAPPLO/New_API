@@ -34,7 +34,7 @@ import {
   IllustrationNoResult,
   IllustrationNoResultDark,
 } from '@douyinfe/semi-illustrations';
-import { IconSearch, IconStar } from '@douyinfe/semi-icons';
+import { IconSearch, IconStar, IconBolt } from '@douyinfe/semi-icons';
 import { API, showError, showSuccess } from '../../../../helpers';
 import { MODEL_TABLE_PAGE_SIZE } from '../../../../constants';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
@@ -75,7 +75,11 @@ const MissingModelsModal = ({
   const [smartFillLoading, setSmartFillLoading] = useState(false);
   const [modelTypes, setModelTypes] = useState({});
   const [ratioOptions, setRatioOptions] = useState({});
-  const [referenceModelName, setReferenceModelName] = useState('');
+
+  // Smart detect states
+  const [llmModel, setLlmModel] = useState('');
+  const [detecting, setDetecting] = useState(false);
+  const [enabledModels, setEnabledModels] = useState([]);
 
   const fetchMissing = async () => {
     setLoading(true);
@@ -84,7 +88,7 @@ const MissingModelsModal = ({
       if (res.data.success) {
         const data = res.data.data || [];
         setMissingModels(data);
-        // Auto-detect types
+        // Auto-detect types as initial guess
         const types = {};
         for (const name of data) {
           types[name] = detectModelType(name);
@@ -99,7 +103,6 @@ const MissingModelsModal = ({
     setLoading(false);
   };
 
-  // Fetch ratio options for reference model selection
   const fetchRatioOptions = async () => {
     try {
       const res = await API.get('/api/option/');
@@ -111,20 +114,32 @@ const MissingModelsModal = ({
     }
   };
 
+  const fetchEnabledModels = async () => {
+    try {
+      const res = await API.get('/api/channel/models_enabled');
+      if (res.data.success) {
+        setEnabledModels(res.data.data || []);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     if (visible) {
       fetchMissing();
       fetchRatioOptions();
+      fetchEnabledModels();
       setSearchKeyword('');
       setCurrentPage(1);
       setSmartFillVisible(false);
-      setReferenceModelName('');
+      setLlmModel('');
     } else {
       setMissingModels([]);
     }
   }, [visible]);
 
-  // Models that already have pricing (for reference selector)
+  // Models that already have pricing (for default ratio in batch fill)
   const configuredModels = useMemo(() => {
     const modelRatioMap = parseOptionJSON(ratioOptions.ModelRatio);
     const modelPriceMap = parseOptionJSON(ratioOptions.ModelPrice);
@@ -163,6 +178,40 @@ const MissingModelsModal = ({
     setModelTypes((prev) => ({ ...prev, [name]: type }));
   };
 
+  // Smart detect: call LLM to classify models
+  const handleSmartDetect = async () => {
+    if (!llmModel) {
+      showError(t('请先选择 LLM 模型'));
+      return;
+    }
+    setDetecting(true);
+    try {
+      const res = await API.post('/api/models/smart_detect', {
+        model_names: missingModels,
+        llm_model: llmModel,
+      });
+      if (res.data.success && res.data.type_map) {
+        const detected = res.data.type_map;
+        // Merge detected types, fallback to existing for undetected
+        const newTypes = { ...modelTypes };
+        for (const [name, type] of Object.entries(detected)) {
+          if (MODEL_TYPES.includes(type)) {
+            newTypes[name] = type;
+          }
+        }
+        setModelTypes(newTypes);
+        showSuccess(res.data.message);
+      } else {
+        showError(res.data.message || t('智能识别失败'));
+      }
+    } catch {
+      showError(t('智能识别失败'));
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  // Batch smart fill: create metadata + pricing
   const handleSmartFill = async () => {
     setSmartFillLoading(true);
     try {
@@ -171,7 +220,7 @@ const MissingModelsModal = ({
         type: modelTypes[name] || 'text',
       }));
       const modelRatioMap = parseOptionJSON(ratioOptions.ModelRatio);
-      const defaultRatio = modelRatioMap[referenceModelName] || 1.0;
+      const defaultRatio = modelRatioMap[configuredModels[0]] || 1.0;
 
       const res = await API.post('/api/models/batch_smart_fill', {
         models,
@@ -350,67 +399,94 @@ const MissingModelsModal = ({
         title={t('智能填充')}
         visible={smartFillVisible}
         onCancel={() => setSmartFillVisible(false)}
-        onOk={handleSmartFill}
-        okText={t('确认填充')}
-        okButtonProps={{ loading: smartFillLoading }}
-        loading={smartFillLoading}
+        footer={null}
+        size={isMobile ? 'full-width' : 'medium'}
       >
-        <div style={{ marginBottom: 16 }}>
-          <div className='mb-2 font-medium'>{t('选择参考模型（可选）')}</div>
-          <Select
-            style={{ width: '100%' }}
-            placeholder={t('选择一个已配置定价的模型，将其倍率作为默认值')}
-            value={referenceModelName}
-            onChange={setReferenceModelName}
-            showClear
-            filter
-          >
-            {configuredModels.map((name) => (
-              <Select.Option key={name} value={name}>
-                {name}
-              </Select.Option>
-            ))}
-          </Select>
-          <div className='mt-2 text-xs text-gray-500'>
+        {/* LLM Smart Detect Section */}
+        <div
+          style={{
+            marginBottom: 16,
+            padding: 16,
+            background: 'var(--semi-color-fill-0)',
+            borderRadius: 8,
+          }}
+        >
+          <div className='mb-2 font-medium'>{t('智能识别')}</div>
+          <div className='text-xs text-gray-500 mb-3'>
             {t(
-              '文本/音频模型将使用参考模型的输入倍率，图片/视频模型将使用按次计费（$0.04/次）。未选择参考模型时默认倍率为 1.0。',
+              '选择一个 LLM 模型，让其根据自身知识判断每个模型的输出类型。',
             )}
+          </div>
+          <div className='flex items-center gap-2'>
+            <Select
+              style={{ flex: 1 }}
+              placeholder={t('选择 LLM 模型（如 gpt-4o-mini）')}
+              value={llmModel}
+              onChange={setLlmModel}
+              showClear
+              filter
+            >
+              {enabledModels.map((name) => (
+                <Select.Option key={name} value={name}>
+                  {name}
+                </Select.Option>
+              ))}
+            </Select>
+            <Button
+              theme='solid'
+              icon={<IconBolt />}
+              loading={detecting}
+              disabled={!llmModel || missingModels.length === 0}
+              onClick={handleSmartDetect}
+            >
+              {t('智能识别')}
+            </Button>
           </div>
         </div>
 
+        {/* Type Distribution */}
         <div style={{ marginBottom: 16 }}>
           <div className='mb-2 font-medium'>{t('模型类型分布')}</div>
           <Space wrap>
             {Object.entries(typeStats)
               .filter(([, count]) => count > 0)
               .map(([type, count]) => (
-                <Tag key={type} color={MODEL_TYPE_COLORS[type]}>
+                <Tag key={type} color={MODEL_TYPE_COLORS[type]} size='large'>
                   {t(MODEL_TYPE_LABELS[type])}: {count}
                 </Tag>
               ))}
           </Space>
           <div className='mt-2 text-xs text-gray-500'>
             {t(
-              '共 {{count}} 个未配置模型。类型已自动检测，可在列表中修改。',
+              '共 {{count}} 个未配置模型。识别后可在列表中手动调整。',
               { count: missingModels.length },
             )}
           </div>
         </div>
 
+        {/* Confirm button */}
         <div
           style={{
             padding: '10px 12px',
             borderRadius: 8,
             background: 'var(--semi-color-primary-light-default)',
             border: '1px solid var(--semi-color-primary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
           }}
         >
           <Typography.Text>
-            {t(
-              '确认后将自动创建模型元数据并设置定价，共 {{count}} 个模型。',
-              { count: missingModels.length },
-            )}
+            {t('确认后将自动创建模型元数据并设置定价。')}
           </Typography.Text>
+          <Button
+            theme='solid'
+            type='primary'
+            loading={smartFillLoading}
+            onClick={handleSmartFill}
+          >
+            {t('确认填充')}
+          </Button>
         </div>
       </Modal>
     </>
