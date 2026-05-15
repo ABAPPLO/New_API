@@ -195,6 +195,14 @@ export default function ChannelImportPage() {
     setSelectedRowKeys([]);
   }, []);
 
+  const updateChannelField = useCallback((index, field, value) => {
+    setChannels((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
+  }, []);
+
   const columns = useMemo(
     () => [
       {
@@ -213,6 +221,21 @@ export default function ChannelImportPage() {
           <Tag color={getChannelTypeColor(type)} shape='circle' type='light'>
             {getChannelTypeName(type)}
           </Tag>
+        ),
+      },
+      {
+        title: 'Key',
+        dataIndex: 'key',
+        key: 'key',
+        width: 200,
+        render: (text, record, index) => (
+          <Input
+            value={text || ''}
+            placeholder={t('输入密钥')}
+            onChange={(val) => updateChannelField(index, 'key', val)}
+            mode='password'
+            style={{ width: '100%' }}
+          />
         ),
       },
       {
@@ -255,7 +278,7 @@ export default function ChannelImportPage() {
         render: (text) => (text ? <Tag type='light'>{text}</Tag> : '-'),
       },
     ],
-    [t],
+    [t, updateChannelField],
   );
 
   const rowSelection = useMemo(

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,6 +37,9 @@ func FetchRemoteChannels(c *gin.Context) {
 	}
 
 	baseURL := strings.TrimRight(req.BaseURL, "/")
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		baseURL = "http://" + baseURL
+	}
 	fetchURL := baseURL + "/api/channel/?p=0&page_size=10000"
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
@@ -77,7 +81,7 @@ func FetchRemoteChannels(c *gin.Context) {
 	var result struct {
 		Success bool            `json:"success"`
 		Message string          `json:"message"`
-		Data    []model.Channel `json:"data"`
+		Data    json.RawMessage `json:"data"`
 	}
 	if err := common.Unmarshal(body, &result); err != nil {
 		common.ApiError(c, fmt.Errorf("解析响应失败: %w", err))
@@ -89,9 +93,22 @@ func FetchRemoteChannels(c *gin.Context) {
 		return
 	}
 
+	var channels []model.Channel
+	// data may be a paginated object {"items": [...], ...} or a plain array
+	if err := common.Unmarshal(result.Data, &channels); err != nil {
+		var paginated struct {
+			Items []model.Channel `json:"items"`
+		}
+		if err2 := common.Unmarshal(result.Data, &paginated); err2 != nil {
+			common.ApiError(c, fmt.Errorf("解析渠道数据失败: %w", err))
+			return
+		}
+		channels = paginated.Items
+	}
+
 	// Clean runtime fields, keep config + key
-	for i := range result.Data {
-		ch := &result.Data[i]
+	for i := range channels {
+		ch := &channels[i]
 		ch.Id = 0
 		ch.TestTime = 0
 		ch.ResponseTime = 0
@@ -100,7 +117,7 @@ func FetchRemoteChannels(c *gin.Context) {
 		ch.UsedQuota = 0
 	}
 
-	common.ApiSuccess(c, result.Data)
+	common.ApiSuccess(c, channels)
 }
 
 func ImportChannels(c *gin.Context) {
@@ -135,10 +152,17 @@ func ImportChannels(c *gin.Context) {
 		ch.UsedQuota = 0
 		ch.Status = common.ChannelStatusEnabled
 
+		// Import: validate settings but skip key check (key can be edited later)
+		savedKey := ch.Key
+		if ch.Key == "" {
+			ch.Key = "import-placeholder"
+		}
 		if err := validateChannel(ch, true); err != nil {
+			ch.Key = savedKey
 			failed = append(failed, FailedChannel{Name: ch.Name, Error: err.Error()})
 			continue
 		}
+		ch.Key = savedKey
 
 		toInsert = append(toInsert, *ch)
 	}
