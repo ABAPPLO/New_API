@@ -2,12 +2,14 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -95,11 +97,13 @@ func SmartDetectModelTypes(c *gin.Context) {
 	// Create fake gin context for relay
 	w := httptest.NewRecorder()
 	fakeCtx, _ := gin.CreateTestContext(w)
-	fakeCtx.Request = &http.Request{
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	fakeCtx.Request = (&http.Request{
 		Method: "POST",
 		URL:    &url.URL{Path: "/v1/chat/completions"},
 		Header: make(http.Header),
-	}
+	}).WithContext(ctx)
 	fakeCtx.Request.Header.Set("Content-Type", "application/json")
 
 	cache, _ := model.GetUserCache(userId)
@@ -176,6 +180,7 @@ func SmartDetectModelTypes(c *gin.Context) {
 
 	resp, err := adaptor.DoRequest(fakeCtx, info, requestBody)
 	if err != nil {
+		common.SysError("smart detect do request failed: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "请求上游失败: " + err.Error(),
